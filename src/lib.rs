@@ -71,3 +71,86 @@ pub use config::Config;
 pub use stack_trace::StackTrace;
 pub use stack_trace::Frame;
 pub use remoteprocess::Pid;
+
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::slice;
+
+lazy_static! {
+    static ref HASHMAP: Mutex<HashMap<Pid, PythonSpy>> =
+    {
+        let h = HashMap::new();
+        Mutex::new(h)
+    };
+}
+
+#[no_mangle]
+pub extern "C" fn pyspy_init(pid: Pid) -> i32 {
+    let config = config::Config::default();
+    match PythonSpy::new(pid, &config) {
+        Ok(getter) => {
+            let mut map = HASHMAP.lock().unwrap(); // get()
+            map.insert(pid, getter);
+        }
+        Err(err) => {
+            println!("{}", err);
+            // TODO: return error string
+            return -1
+        }
+    }
+
+    return 1
+}
+
+#[no_mangle]
+pub extern "C" fn pyspy_cleanup(pid: Pid) -> i32 {
+    let mut map = HASHMAP.lock().unwrap(); // get()
+    map.remove(&pid);
+    1
+}
+
+#[no_mangle]
+pub extern "C" fn pyspy_snapshot(pid: Pid, ptr: *mut u8, len: i32) -> i32 {
+    let mut map = HASHMAP.lock().unwrap(); // get()
+    match map.get_mut(&pid) {
+        Some(getter) => {
+            let mut res = 0;
+            let trace_res = getter.get_stack_traces();
+            match trace_res {
+                Ok(trace) => {
+                    let mut string_list = vec![];
+                    for thread in trace.iter() {
+                        if thread.active {
+                            for frame in &thread.frames {
+                                let filename = match &frame.short_filename { Some(f) => &f, None => &frame.filename };
+                                if frame.line != 0 {
+                                    string_list.insert(0, format!("{}:{} - {}", filename, frame.line, frame.name));
+                                } else {
+                                    string_list.insert(0, format!("{} - {}", filename, frame.name));
+                                }
+                            }
+                            break
+                        }
+                    }
+                    let joined = string_list.join(";");
+                    let joined_slice = joined.as_bytes();
+                    let l = joined_slice.len();
+
+                    if len < (l as i32) {
+                        res = -1;
+                    } else {
+                        let slice = unsafe { slice::from_raw_parts_mut(ptr, l as usize) };
+                        slice.clone_from_slice(joined_slice);
+                        res = l as i32
+                    }
+                }
+                Err(err) => {
+                    res = -3
+                }
+            }
+            res
+        }
+        None => -2
+    }
+}

@@ -10,6 +10,9 @@ exclude = ["images/*", "test_programs/*"]
 license = "MIT"
 build="build.rs"
 
+[lib]
+crate-type = ["staticlib", "dylib", "rlib"]
+
 [dependencies]
 clap = {version="2", features=["wrap_help"]}
 console = "0.13"

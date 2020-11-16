@@ -45,6 +45,8 @@ pub struct PythonSpy {
     pub dockerized: bool
 }
 
+unsafe impl Send for PythonSpy {}
+
 impl PythonSpy {
     /// Constructs a new PythonSpy object.
     pub fn new(pid: Pid, config: &Config) -> Result<PythonSpy, Error> {
