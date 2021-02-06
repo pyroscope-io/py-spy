@@ -9,7 +9,7 @@ use crate::python_interpreters::{InterpreterState, ThreadState, FrameObject, Cod
 use crate::python_data_access::{copy_string, copy_bytes};
 
 /// Call stack for a single python thread
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct StackTrace {
     /// The process id than generated this stack trace
     pub pid: Pid,
@@ -30,7 +30,7 @@ pub struct StackTrace {
 }
 
 /// Information about a single function call in a stack trace
-#[derive(Debug, Hash, Eq, PartialEq, Ord, PartialOrd, Clone, Serialize)]
+#[derive(Debug, Hash, Eq, PartialEq, Ord, PartialOrd, Clone)]
 pub struct Frame {
     /// The function name
     pub name: String,
@@ -46,7 +46,7 @@ pub struct Frame {
     pub locals: Option<Vec<LocalVariable>>,
 }
 
-#[derive(Debug, Hash, Eq, PartialEq, Ord, PartialOrd, Clone, Serialize)]
+#[derive(Debug, Hash, Eq, PartialEq, Ord, PartialOrd, Clone)]
 pub struct LocalVariable {
     pub name: String,
     pub addr: usize,
@@ -54,7 +54,7 @@ pub struct LocalVariable {
     pub repr: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct ProcessInfo {
     pub pid:  Pid,
     pub command_line: String,
