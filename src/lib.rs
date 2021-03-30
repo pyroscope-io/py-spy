@@ -131,7 +131,7 @@ pub extern "C" fn pyspy_snapshot(pid: Pid, ptr: *mut u8, len: i32, err_ptr: *mut
                             for frame in &thread.frames {
                                 let filename = match &frame.short_filename { Some(f) => &f, None => &frame.filename };
                                 if frame.line != 0 {
-                                    string_list.insert(0, format!("{}:{} - {}", filename, frame.line, frame.name));
+                                    string_list.insert(0, format!("{} - {}:{}", filename, frame.name, frame.line));
                                 } else {
                                     string_list.insert(0, format!("{} - {}", filename, frame.name));
                                 }
