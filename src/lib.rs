@@ -16,9 +16,7 @@
 //!
 //!     // Print out the python stack for each thread
 //!     for trace in traces {
-//!         println!("Thread {:#X} ({})", trace.thread_id, trace.status_str());
 //!         for frame in &trace.frames {
-//!             println!("\t {} ({}:{})", frame.name, frame.filename, frame.line);
 //!         }
 //!     }
 //!     Ok(())
@@ -70,10 +68,10 @@ pub use stack_trace::StackTrace;
 pub use stack_trace::Frame;
 pub use remoteprocess::Pid;
 
-
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::slice;
+use crate::config::LockingStrategy;
 
 lazy_static! {
     static ref HASHMAP: Mutex<HashMap<Pid, PythonSpy>> =
@@ -95,8 +93,11 @@ fn copy_error(err_ptr: *mut u8, err_len: i32, err_str: String) -> i32 {
 }
 
 #[no_mangle]
-pub extern "C" fn pyspy_init(pid: Pid, err_ptr: *mut u8, err_len: i32) -> i32 {
-    let config = config::Config::default();
+pub extern "C" fn pyspy_init(pid: Pid, blocking: i32, err_ptr: *mut u8, err_len: i32) -> i32 {
+    let mut config = config::Config::default();
+    if blocking == 0 {
+        config.blocking = LockingStrategy::NonBlocking;
+    }
     match PythonSpy::new(pid, &config) {
         Ok(getter) => {
             let mut map = HASHMAP.lock().unwrap(); // get()
