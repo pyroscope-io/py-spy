@@ -1,37 +1,7 @@
 #[macro_use]
-extern crate clap;
-extern crate console;
-extern crate ctrlc;
-extern crate env_logger;
-#[macro_use]
 extern crate failure;
-extern crate goblin;
-extern crate indicatif;
-extern crate inferno;
-#[macro_use]
-extern crate lazy_static;
-extern crate libc;
 #[macro_use]
 extern crate log;
-#[cfg(unwind)]
-extern crate lru;
-extern crate memmap;
-extern crate proc_maps;
-extern crate regex;
-extern crate tempfile;
-#[cfg(unix)]
-extern crate termios;
-#[cfg(windows)]
-extern crate winapi;
-extern crate cpp_demangle;
-extern crate rand;
-extern crate rand_distr;
-extern crate serde;
-#[macro_use]
-extern crate serde_derive;
-extern crate serde_json;
-
-extern crate remoteprocess;
 
 mod config;
 mod dump;
@@ -54,7 +24,7 @@ mod timer;
 mod utils;
 mod version;
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,6 +35,8 @@ use failure::Error;
 use stack_trace::{StackTrace, Frame};
 use console_viewer::ConsoleViewer;
 use config::{Config, FileFormat, RecordDuration};
+
+use chrono::{SecondsFormat, Local};
 
 #[cfg(unix)]
 fn permission_denied(err: &Error) -> bool {
@@ -112,14 +84,14 @@ fn sample_console(pid: remoteprocess::Pid,
 
 pub trait Recorder {
     fn increment(&mut self, trace: &StackTrace) -> Result<(), Error>;
-    fn write(&self, w: &mut std::fs::File) -> Result<(), Error>;
+    fn write(&self, w: &mut dyn Write) -> Result<(), Error>;
 }
 
 impl Recorder for speedscope::Stats {
     fn increment(&mut self, trace: &StackTrace) -> Result<(), Error> {
         Ok(self.record(trace)?)
     }
-    fn write(&self, w: &mut std::fs::File) -> Result<(), Error> {
+    fn write(&self, w: &mut dyn Write) -> Result<(), Error> {
         self.write(w)
     }
 }
@@ -128,7 +100,7 @@ impl Recorder for flamegraph::Flamegraph {
     fn increment(&mut self, trace: &StackTrace) -> Result<(), Error> {
         Ok(self.increment(trace)?)
     }
-    fn write(&self, w: &mut std::fs::File) -> Result<(), Error> {
+    fn write(&self, w: &mut dyn Write) -> Result<(), Error> {
         self.write(w)
     }
 }
@@ -140,7 +112,7 @@ impl Recorder for RawFlamegraph {
         Ok(self.0.increment(trace)?)
     }
 
-    fn write(&self, w: &mut std::fs::File) -> Result<(), Error> {
+    fn write(&self, w: &mut dyn Write) -> Result<(), Error> {
         self.0.write_raw(w)
     }
 }
@@ -148,14 +120,30 @@ impl Recorder for RawFlamegraph {
 fn record_samples(pid: remoteprocess::Pid, config: &Config) -> Result<(), Error> {
     let mut output: Box<dyn Recorder> = match config.format {
         Some(FileFormat::flamegraph) => Box::new(flamegraph::Flamegraph::new(config.show_line_numbers)),
-        Some(FileFormat::speedscope) =>  Box::new(speedscope::Stats::new(config.show_line_numbers)),
+        Some(FileFormat::speedscope) =>  Box::new(speedscope::Stats::new(config)),
         Some(FileFormat::raw) => Box::new(RawFlamegraph(flamegraph::Flamegraph::new(config.show_line_numbers))),
         None => return Err(format_err!("A file format is required to record samples"))
     };
 
-    let filename = match config.filename.as_ref() {
+    let filename = match config.filename.clone() {
         Some(filename) => filename,
-        None => return Err(format_err!("A filename is required to record samples"))
+        None => {
+            let ext = match config.format.as_ref() {
+                Some(FileFormat::flamegraph) => "svg",
+                Some(FileFormat::speedscope) => "json",
+                Some(FileFormat::raw) => "txt",
+                None => return Err(format_err!("A file format is required to record samples"))
+            };
+            let local_time = Local::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+            let name = match config.python_program.as_ref() {
+                Some(prog) => prog[0].to_string(),
+                None  => match config.pid.as_ref() {
+                    Some(pid) => pid.to_string(),
+                    None => String::from("unknown")
+                }
+            };
+            format!("{}-{}.{}", name, local_time, ext)
+            }
     };
 
     let sampler = sampler::Sampler::new(pid, config)?;
@@ -169,7 +157,7 @@ fn record_samples(pid: remoteprocess::Pid, config: &Config) -> Result<(), Error>
         "".to_owned()
     };
 
-    let max_samples = match &config.duration {
+    let max_intervals = match &config.duration {
         RecordDuration::Unlimited => {
             println!("{}Sampling process {} times a second. Press Control-C to exit.", lede, config.sampling_rate);
             None
@@ -196,6 +184,7 @@ fn record_samples(pid: remoteprocess::Pid, config: &Config) -> Result<(), Error>
     };
 
     let mut errors = 0;
+    let mut intervals = 0;
     let mut samples = 0;
     println!();
 
@@ -205,7 +194,7 @@ fn record_samples(pid: remoteprocess::Pid, config: &Config) -> Result<(), Error>
         r.store(false, Ordering::SeqCst);
     })?;
 
-    let mut exit_message = "Stopped sampling because process exitted";
+    let mut exit_message = "Stopped sampling because process exited";
     let mut last_late_message = std::time::Instant::now();
 
     for mut sample in sampler {
@@ -232,9 +221,9 @@ fn record_samples(pid: remoteprocess::Pid, config: &Config) -> Result<(), Error>
             break;
         }
 
-        samples += 1;
-        if let Some(max_samples) = max_samples {
-            if samples >= max_samples {
+        intervals += 1;
+        if let Some(max_intervals) = max_intervals {
+            if intervals >= max_intervals {
                 exit_message = "";
                 break;
             }
@@ -267,6 +256,7 @@ fn record_samples(pid: remoteprocess::Pid, config: &Config) -> Result<(), Error>
                 }
             }
 
+            samples += 1;
             output.increment(&trace)?;
         }
 
@@ -294,7 +284,7 @@ fn record_samples(pid: remoteprocess::Pid, config: &Config) -> Result<(), Error>
     }
 
     {
-    let mut out_file = std::fs::File::create(filename)?;
+    let mut out_file = std::fs::File::create(&filename)?;
     output.write(&mut out_file)?;
     }
 
@@ -305,7 +295,7 @@ fn record_samples(pid: remoteprocess::Pid, config: &Config) -> Result<(), Error>
             // you might be SSH'ed into a server somewhere and this isn't desired, but on
             // that is pretty unlikely for osx) (note to self: xdg-open will open on linux)
             #[cfg(target_os = "macos")]
-            std::process::Command::new("open").arg(filename).spawn()?;
+            std::process::Command::new("open").arg(&filename).spawn()?;
         },
         FileFormat::speedscope =>  {
             println!("{}Wrote speedscope file to '{}'. Samples: {} Errors: {}", lede, filename, samples, errors);
@@ -407,7 +397,7 @@ fn pyspy_main() -> Result<(), Error> {
             }
         }
 
-        // kill it so we don't have dangling processess
+        // kill it so we don't have dangling processes
         if command.kill().is_err() {
             // I don't actually care if we failed to kill ... most times process is already done
             // eprintln!("Error killing child process {}", e);

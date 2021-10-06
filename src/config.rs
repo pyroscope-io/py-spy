@@ -1,4 +1,4 @@
-use clap::{App, Arg};
+use clap::{App, AppSettings, Arg, crate_description, crate_name, crate_version, arg_enum, value_t};
 use remoteprocess::Pid;
 
 /// Options on how to collect samples from a python process
@@ -48,6 +48,10 @@ pub struct Config {
     pub dump_json: bool,
     #[doc(hidden)]
     pub dump_locals: u64,
+    #[doc(hidden)]
+    pub full_filenames: bool,
+    #[doc(hidden)]
+    pub lineno: LineNo,
 }
 
 arg_enum!{
@@ -74,6 +78,13 @@ pub enum RecordDuration {
     Seconds(u64)
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Copy)]
+pub enum LineNo {
+    NoLine,
+    FirstLineNo,
+    LastInstruction
+}
+
 impl Default for Config {
     /// Initializes a new Config object with default parameters
     #[allow(dead_code)]
@@ -83,7 +94,8 @@ impl Default for Config {
                blocking: LockingStrategy::Lock, show_line_numbers: false, sampling_rate: 100,
                duration: RecordDuration::Unlimited, native: false,
                gil_only: false, include_idle: false, include_thread_ids: false,
-               hide_progress: false, capture_output: true, dump_json: false, dump_locals: 0, subprocesses: false}
+               hide_progress: false, capture_output: true, dump_json: false, dump_locals: 0, subprocesses: false,
+               full_filenames: false, lineno: LineNo::LastInstruction }
     }
 }
 
@@ -95,7 +107,7 @@ impl Config {
     }
 
     pub fn from_args(args: &[String]) -> clap::Result<Config> {
-        // pid/native/nonblocking/rate/pythonprogram arguments can be
+        // pid/native/nonblocking/rate/python_program/subprocesses/full_filenames arguments can be
         // used across various subcommand - define once here
         let pid = Arg::with_name("pid")
                     .short("p")
@@ -114,7 +126,7 @@ impl Config {
         let nonblocking = Arg::with_name("nonblocking")
                     .long("nonblocking")
                     .help("Don't pause the python process when collecting samples. Setting this option will reduce \
-                          the perfomance impact of sampling, but may lead to inaccurate results");
+                          the performance impact of sampling, but may lead to inaccurate results");
 
         let rate = Arg::with_name("rate")
                     .short("r")
@@ -124,26 +136,40 @@ impl Config {
                     .default_value("100")
                     .takes_value(true);
 
-    let subprocesses = Arg::with_name("subprocesses")
-        .short("s")
-        .long("subprocesses")
-        .help("Profile subprocesses of the original process");
+        let subprocesses = Arg::with_name("subprocesses")
+                            .short("s")
+                            .long("subprocesses")
+                            .help("Profile subprocesses of the original process");
 
+        let full_filenames = Arg::with_name("full_filenames")
+                                .long("full-filenames")
+                                .help("Show full Python filenames, instead of shortening to show only the package part");
         let program = Arg::with_name("python_program")
                     .help("commandline of a python program to run")
                     .multiple(true);
+
+        let idle = Arg::with_name("idle")
+                .short("i")
+                .long("idle")
+                .help("Include stack traces for idle threads");
+
+        let gil = Arg::with_name("gil")
+                .short("g")
+                .long("gil")
+                .help("Only include traces that are holding on to the GIL");
 
         let record = clap::SubCommand::with_name("record")
             .about("Records stack trace information to a flamegraph, speedscope or raw file")
             .arg(program.clone())
             .arg(pid.clone())
+            .arg(full_filenames.clone())
             .arg(Arg::with_name("output")
                 .short("o")
                 .long("output")
                 .value_name("filename")
                 .help("Output filename")
                 .takes_value(true)
-                .required(true))
+                .required(false))
             .arg(Arg::with_name("format")
                 .short("f")
                 .long("format")
@@ -165,19 +191,16 @@ impl Config {
             .arg(Arg::with_name("function")
                 .short("F")
                 .long("function")
-                .help("Aggregate samples by function name instead of by line number"))
-            .arg(Arg::with_name("gil")
-                .short("g")
-                .long("gil")
-                .help("Only include traces that are holding on to the GIL"))
+                .help("Aggregate samples by function's first line number, instead of current line number"))
+            .arg(Arg::with_name("nolineno")
+                .long("nolineno")
+                .help("Do not show line numbers"))
             .arg(Arg::with_name("threads")
                 .short("t")
                 .long("threads")
                 .help("Show thread ids in the output"))
-            .arg(Arg::with_name("idle")
-                .short("i")
-                .long("idle")
-                .help("Include stack traces for idle threads"))
+            .arg(gil.clone())
+            .arg(idle.clone())
             .arg(Arg::with_name("capture")
                 .long("capture")
                 .hidden(true)
@@ -192,11 +215,15 @@ impl Config {
             .arg(program.clone())
             .arg(pid.clone())
             .arg(rate.clone())
-            .arg(subprocesses.clone());
+            .arg(subprocesses.clone())
+            .arg(full_filenames.clone())
+            .arg(gil.clone())
+            .arg(idle.clone());
 
         let dump = clap::SubCommand::with_name("dump")
             .about("Dumps stack traces for a target program to stdout")
             .arg(pid.clone().required(true))
+            .arg(full_filenames.clone())
             .arg(Arg::with_name("locals")
                 .short("l")
                 .long("locals")
@@ -207,7 +234,14 @@ impl Config {
                 .long("json")
                 .help("Format output as JSON"));
 
-        // add native unwinding if appropiate
+        let completions = clap::SubCommand::with_name("completions")
+            .about("Generate shell completions")
+            .setting(AppSettings::Hidden)
+            .arg(Arg::with_name("shell")
+                .possible_values(&clap::Shell::variants())
+                .help("Shell type"));
+
+        // add native unwinding if appropriate
         #[cfg(unwind)]
         let record = record.arg(native.clone());
         #[cfg(unwind)]
@@ -223,7 +257,7 @@ impl Config {
         #[cfg(not(target_os="freebsd"))]
         let dump = dump.arg(nonblocking.clone());
 
-        let matches = App::new(crate_name!())
+        let mut app = App::new(crate_name!())
             .version(crate_version!())
             .about(crate_description!())
             .setting(clap::AppSettings::InferSubcommands)
@@ -233,7 +267,8 @@ impl Config {
             .subcommand(record)
             .subcommand(top)
             .subcommand(dump)
-            .get_matches_from_safe(args)?;
+            .subcommand(completions);
+        let matches = app.clone().get_matches_from_safe(args)?;
         info!("Command line args: {:?}", matches);
 
         let mut config = Config::default();
@@ -254,6 +289,11 @@ impl Config {
             "top" => {
                 config.sampling_rate = value_t!(matches, "rate", u64)?;
             }
+            "completions" => {
+                let shell = value_t!(matches.value_of("shell"), clap::Shell).unwrap_or_else(|e| e.exit());
+                app.gen_completions_to(crate_name!(), shell, &mut std::io::stdout());
+                std::process::exit(0);
+            }
             _ => {}
         }
         config.command = subcommand.to_owned();
@@ -263,7 +303,7 @@ impl Config {
         config.python_program = matches.values_of("python_program").map(|vals| {
             vals.map(|v| v.to_owned()).collect()
         });
-        config.show_line_numbers = matches.occurrences_of("function") == 0;
+        config.show_line_numbers = matches.occurrences_of("nolineno") == 0;
         config.include_idle = matches.occurrences_of("idle") > 0;
         config.gil_only = matches.occurrences_of("gil") > 0;
         config.include_thread_ids = matches.occurrences_of("threads") > 0;
@@ -273,6 +313,12 @@ impl Config {
         config.dump_json = matches.occurrences_of("json") > 0;
         config.dump_locals = matches.occurrences_of("locals");
         config.subprocesses = matches.occurrences_of("subprocesses") > 0;
+        config.full_filenames = matches.occurrences_of("full_filenames") > 0;
+        config.lineno = if matches.occurrences_of("nolineno") > 0 { LineNo::NoLine } else if matches.occurrences_of("function") > 0 { LineNo::FirstLineNo } else { LineNo::LastInstruction };
+        if matches.occurrences_of("nolineno") > 0 && matches.occurrences_of("function") > 0 {
+            eprintln!("--function & --nolinenos can't be used together");
+            std::process::exit(1);
+        }
 
         config.capture_output = config.command != "record" || matches.occurrences_of("capture") > 0;
         if !config.capture_output {
