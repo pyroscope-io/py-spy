@@ -137,8 +137,8 @@ pub extern "C" fn pyspy_snapshot(pid: Pid, ptr: *mut u8, len: i32, err_ptr: *mut
                                     string_list.insert(0, format!("{} - {}", filename, frame.name));
                                 }
                             }
+                            string_list.insert(0, "\n".to_string());
                         }
-                        string_list.insert(0, "\n".to_string());
                     }
                     let joined = string_list.join(";");
                     let joined_slice = joined.as_bytes();
