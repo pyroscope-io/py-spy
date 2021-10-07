@@ -22,28 +22,10 @@
 //!     Ok(())
 //! }
 //! ```
-
-#[macro_use]
-extern crate clap;
 #[macro_use]
 extern crate failure;
-extern crate goblin;
-#[macro_use]
-extern crate lazy_static;
-extern crate libc;
 #[macro_use]
 extern crate log;
-#[cfg(unwind)]
-extern crate lru;
-extern crate memmap;
-extern crate proc_maps;
-extern crate regex;
-#[cfg(windows)]
-extern crate winapi;
-extern crate cpp_demangle;
-extern crate rand;
-extern crate rand_distr;
-extern crate remoteprocess;
 
 pub mod config;
 pub mod binary_parser;
@@ -71,6 +53,7 @@ pub use remoteprocess::Pid;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::slice;
+use lazy_static::lazy_static;
 use crate::config::LockingStrategy;
 
 lazy_static! {
@@ -137,7 +120,7 @@ pub extern "C" fn pyspy_snapshot(pid: Pid, ptr: *mut u8, len: i32, err_ptr: *mut
                                     string_list.insert(0, format!("{} - {}", filename, frame.name));
                                 }
                             }
-                            break
+                            string_list.insert(0, "\n".to_string());
                         }
                     }
                     let joined = string_list.join(";");
