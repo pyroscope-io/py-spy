@@ -260,9 +260,9 @@ impl PythonSpy {
             // calls are active (which seems related to the thread locking code,
             // this problem doesn't seem to happen with the --nonblocking option)
             // Note: this should be done before the native merging for correct results
-            if trace.active {
-                trace.active = !self._heuristic_is_thread_idle(&trace);
-            }
+            //if trace.active {
+            //    trace.active = !self._heuristic_is_thread_idle(&trace);
+            //}
 
             // Merge in the native stack frames if necessary
             #[cfg(unwind)]
